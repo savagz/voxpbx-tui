@@ -1,0 +1,21 @@
+# Plantilla opcional: en el primer arranque la app pide estos datos por pantalla
+# y escribe el archivo sola (en ~/.config/voxpbx-tui/config.toml, permisos 0600).
+# Copiala a config/voxpbx.toml sólo si preferís cargarla a mano.
+
+[ami]
+host = "127.0.0.1"
+port = 5038
+username = "voxpbx_tui_readonly"
+# Dejalo vacío y exportá VOXPBX_AMI_SECRET si no querés el secret en disco.
+secret = ""
+
+[capture]
+interface = "eth0"
+sip_ports = [5060, 5061]
+enabled = true
+
+[ui]
+tick_rate_ms = 250
+refresh_channels_secs = 2
+refresh_peers_secs = 5
+refresh_queues_secs = 3
