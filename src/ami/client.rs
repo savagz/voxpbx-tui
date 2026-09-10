@@ -13,7 +13,7 @@ use crate::config::{AmiConfig, Config, UiConfig};
 use crate::event::AppEvent;
 
 use super::protocol::{self, AmiMessage};
-use super::{Channel, ConnState, CoreStatus, Peer, Queue};
+use super::{Channel, ConnState, CoreStatus, Peer, Queue, Tech};
 
 /// Todo lo que la tarea AMI necesita para (re)conectarse. Viaja por un `watch`
 /// para que el panel de configuración pueda cambiar host/usuario/contraseña sin
@@ -171,9 +171,7 @@ async fn run_connection(settings: &AmiSettings, app_tx: &mpsc::Sender<AppEvent>)
                 }
             }
             _ = peers_iv.tick() => {
-                if let Err(e) = refresh_peers(&mut write_half, &pending, app_tx).await {
-                    warn!("SIPpeers: {e}");
-                }
+                refresh_peers(&mut write_half, &pending, app_tx).await;
             }
             _ = queues_iv.tick() => {
                 if let Err(e) = refresh_queues(&mut write_half, &pending, app_tx).await {
@@ -308,25 +306,140 @@ async fn refresh_channels(
     Ok(())
 }
 
+/// Refresca las tres tech de extensiones que puede tener un Asterisk vivo:
+/// chan_sip, chan_iax2, y PJSIP (que a diferencia de las otras dos no reporta
+/// IP/estado en un único evento, así que hace falta cruzar dos acciones).
+///
+/// Cada fetch se intenta por separado: si una tech no está cargada en el
+/// Asterisk destino (acción inexistente → `Response: Error`, sin eventos), esa
+/// falla no debe tirar abajo el refresco de las otras dos.
 async fn refresh_peers(
     write_half: &mut OwnedWriteHalf,
     pending: &PendingMap,
     app_tx: &mpsc::Sender<AppEvent>,
-) -> Result<()> {
-    let events = send_list_action(write_half, pending, &[("Action", "SIPpeers")]).await?;
+) {
+    match send_list_action(write_half, pending, &[("Action", "SIPpeers")]).await {
+        Ok(events) => {
+            let _ = app_tx
+                .send(AppEvent::PeersUpdated(parse_sip_peers(&events)))
+                .await;
+        }
+        Err(e) => warn!("SIPpeers: {e}"),
+    }
 
-    let peers = events
+    match send_list_action(write_half, pending, &[("Action", "IAXpeers")]).await {
+        Ok(events) => {
+            let _ = app_tx
+                .send(AppEvent::IaxPeersUpdated(parse_iax_peers(&events)))
+                .await;
+        }
+        Err(e) => warn!("IAXpeers: {e}"),
+    }
+
+    let endpoints = send_list_action(write_half, pending, &[("Action", "PJSIPShowEndpoints")]).await;
+    let contacts = send_list_action(write_half, pending, &[("Action", "PJSIPShowContacts")]).await;
+    match (endpoints, contacts) {
+        (Ok(endpoints), Ok(contacts)) => {
+            let _ = app_tx
+                .send(AppEvent::PjsipPeersUpdated(parse_pjsip_peers(
+                    &endpoints, &contacts,
+                )))
+                .await;
+        }
+        (Err(e), _) => warn!("PJSIPShowEndpoints: {e}"),
+        (_, Err(e)) => warn!("PJSIPShowContacts: {e}"),
+    }
+}
+
+fn parse_sip_peers(events: &[AmiMessage]) -> Vec<Peer> {
+    events
         .iter()
         .filter(|e| e.get("Event").map(String::as_str) == Some("PeerEntry"))
         .map(|e| Peer {
             name: e.get("ObjectName").cloned().unwrap_or_default(),
             ip: e.get("IPaddress").cloned().unwrap_or_default(),
             status: e.get("Status").cloned().unwrap_or_default(),
+            tech: Tech::Sip,
         })
-        .collect();
+        .collect()
+}
 
-    let _ = app_tx.send(AppEvent::PeersUpdated(peers)).await;
-    Ok(())
+fn parse_iax_peers(events: &[AmiMessage]) -> Vec<Peer> {
+    events
+        .iter()
+        .filter(|e| e.get("Event").map(String::as_str) == Some("PeerEntry"))
+        .map(|e| Peer {
+            name: e.get("ObjectName").cloned().unwrap_or_default(),
+            ip: e.get("IPaddress").cloned().unwrap_or_default(),
+            status: e.get("Status").cloned().unwrap_or_default(),
+            tech: Tech::Iax2,
+        })
+        .collect()
+}
+
+/// `PJSIPShowEndpoints` sólo da el nombre del endpoint y su `DeviceState`, sin
+/// IP; la IP y el estado real de registro salen de `PJSIPShowContacts`, cruzado
+/// por endpoint. El cruce usa el header `Endpoint` de cada contacto (no `AOR`:
+/// el evento `ContactList` real de Asterisk no trae ese header, sólo `Endpoint`
+/// con el nombre del endpoint dueño del contacto — confirmado contra AMI real,
+/// no contra la doc). El header de URI del contacto es `Uri` (no `URI`), y el
+/// status de un contacto vivo es el string `Reachable` (no `Avail`).
+fn parse_pjsip_peers(endpoints: &[AmiMessage], contacts: &[AmiMessage]) -> Vec<Peer> {
+    let mut contacts_by_endpoint: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
+    for c in contacts {
+        if c.get("Event").map(String::as_str) != Some("ContactList") {
+            continue;
+        }
+        let Some(endpoint) = c.get("Endpoint") else { continue };
+        let uri = c.get("Uri").map(String::as_str).unwrap_or_default();
+        let status = c.get("Status").map(String::as_str).unwrap_or_default();
+        contacts_by_endpoint
+            .entry(endpoint.as_str())
+            .or_default()
+            .push((uri, status));
+    }
+
+    endpoints
+        .iter()
+        .filter(|e| e.get("Event").map(String::as_str) == Some("EndpointList"))
+        .map(|e| {
+            let name = e.get("ObjectName").cloned().unwrap_or_default();
+            let bindings = contacts_by_endpoint.get(name.as_str());
+
+            let (ip, status) = if let Some((uri, _)) = bindings
+                .and_then(|b| b.iter().find(|(_, s)| s.eq_ignore_ascii_case("Reachable")))
+            {
+                (contact_uri_host(uri), "OK".to_string())
+            } else if let Some((uri, _)) = bindings.and_then(|b| b.first()) {
+                (contact_uri_host(uri), "UNREACHABLE".to_string())
+            } else {
+                (String::new(), "UNKNOWN".to_string())
+            };
+
+            Peer {
+                name,
+                ip,
+                status,
+                tech: Tech::Pjsip,
+            }
+        })
+        .collect()
+}
+
+/// Saca el host de una URI de contacto PJSIP (`sip:1002@192.168.1.50:5060` →
+/// `192.168.1.50`). No usa `packet::uri_user` porque acá interesa el host, no
+/// el usuario, y estas URIs de AMI no traen el `<...>` con display name.
+fn contact_uri_host(uri: &str) -> String {
+    let without_scheme = uri
+        .strip_prefix("sips:")
+        .or_else(|| uri.strip_prefix("sip:"))
+        .unwrap_or(uri);
+    let after_user = match without_scheme.split_once('@') {
+        Some((_, host)) => host,
+        None => without_scheme,
+    };
+    let end = after_user.find([':', ';', '>']).unwrap_or(after_user.len());
+    after_user[..end].to_string()
 }
 
 async fn refresh_queues(
@@ -382,9 +495,15 @@ async fn reader_loop(
             }
             Some(PendingEntry::List(events, _)) => {
                 let is_complete = message.get("EventList").map(String::as_str) == Some("Complete");
+                // Una acción de lista para un comando no soportado (ej. `SIPpeers` en un
+                // Asterisk sin chan_sip cargado) responde de una `Response: Error` y
+                // nunca manda `EventList: Complete`. Sin este chequeo, esa entrada se
+                // queda pendiente hasta el timeout de 5s (y huérfana en el mapa después),
+                // en cada ciclo de refresco.
+                let is_error = message.get("Response").map(String::as_str) == Some("Error");
                 let is_initial_ack = message.contains_key("Response");
 
-                if is_complete {
+                if is_complete || is_error {
                     if let Some(PendingEntry::List(events, tx)) = guard.remove(&action_id) {
                         drop(guard);
                         let _ = tx.send(events);
@@ -400,5 +519,98 @@ async fn reader_loop(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn msg(pairs: &[(&str, &str)]) -> AmiMessage {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn parsea_peers_sip() {
+        let events = vec![msg(&[
+            ("Event", "PeerEntry"),
+            ("ObjectName", "1001"),
+            ("IPaddress", "192.168.1.10"),
+            ("Status", "OK (5 ms)"),
+        ])];
+        let peers = parse_sip_peers(&events);
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].name, "1001");
+        assert_eq!(peers[0].ip, "192.168.1.10");
+        assert!(peers[0].is_registered());
+        assert_eq!(peers[0].tech, Tech::Sip);
+    }
+
+    #[test]
+    fn parsea_peers_iax2() {
+        let events = vec![msg(&[
+            ("Event", "PeerEntry"),
+            ("ObjectName", "2001"),
+            ("IPaddress", "192.168.1.20"),
+            ("Status", "UNREACHABLE"),
+        ])];
+        let peers = parse_iax_peers(&events);
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].name, "2001");
+        assert!(!peers[0].is_registered());
+        assert_eq!(peers[0].tech, Tech::Iax2);
+    }
+
+    #[test]
+    fn cruza_endpoint_pjsip_con_su_contacto_disponible() {
+        let endpoints = vec![msg(&[
+            ("Event", "EndpointList"),
+            ("ObjectName", "1003"),
+        ])];
+        let contacts = vec![msg(&[
+            ("Event", "ContactList"),
+            ("Endpoint", "1003"),
+            ("Uri", "sip:1003@192.168.1.30:5060"),
+            ("Status", "Reachable"),
+        ])];
+
+        let peers = parse_pjsip_peers(&endpoints, &contacts);
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].ip, "192.168.1.30");
+        assert!(peers[0].is_registered());
+        assert_eq!(peers[0].tech, Tech::Pjsip);
+    }
+
+    #[test]
+    fn endpoint_pjsip_sin_contactos_queda_sin_registrar() {
+        let endpoints = vec![msg(&[("Event", "EndpointList"), ("ObjectName", "1004")])];
+        let contacts: Vec<AmiMessage> = vec![];
+
+        let peers = parse_pjsip_peers(&endpoints, &contacts);
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].ip, "");
+        assert!(!peers[0].is_registered());
+    }
+
+    #[test]
+    fn endpoint_pjsip_con_contacto_no_disponible_reporta_su_ip_igual() {
+        let endpoints = vec![msg(&[("Event", "EndpointList"), ("ObjectName", "1005")])];
+        let contacts = vec![msg(&[
+            ("Event", "ContactList"),
+            ("Endpoint", "1005"),
+            ("Uri", "sip:1005@192.168.1.40:5060"),
+            ("Status", "Unreachable"),
+        ])];
+
+        let peers = parse_pjsip_peers(&endpoints, &contacts);
+        assert_eq!(peers[0].ip, "192.168.1.40");
+        assert!(!peers[0].is_registered());
+    }
+
+    #[test]
+    fn saca_el_host_de_una_uri_de_contacto() {
+        assert_eq!(contact_uri_host("sip:1002@192.168.1.50:5060"), "192.168.1.50");
+        assert_eq!(contact_uri_host("sips:1002@10.0.0.1"), "10.0.0.1");
+        assert_eq!(contact_uri_host("sip:10.0.0.1:5060"), "10.0.0.1");
     }
 }

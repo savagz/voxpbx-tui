@@ -56,7 +56,12 @@ impl Default for CaptureConfig {
     fn default() -> Self {
         Self {
             interface: "any".to_string(),
-            sip_ports: vec![5060, 5061],
+            // 8088 es el bindport HTTP default de Asterisk para SIP sobre
+            // WebSocket (extensiones WebRTC/softphone con `transport=ws`, sin
+            // TLS); sin este puerto la captura ni siquiera pasa por el BPF
+            // filter, aparte de necesitar el desenvuelto de frames WS (ver
+            // `sip_capture::parser::unwrap_websocket_frame`).
+            sip_ports: vec![5060, 5061, 8088],
             enabled: true,
         }
     }

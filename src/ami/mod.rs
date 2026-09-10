@@ -49,12 +49,37 @@ pub struct Channel {
     pub duration: String,
 }
 
+/// Canal por el que está registrada una extensión. Asterisk puede tener la misma
+/// extensión dada de alta en más de un driver a la vez (típico durante una
+/// migración chan_sip → PJSIP), por eso viaja como dato del peer y no se asume.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tech {
+    Sip,
+    Pjsip,
+    Iax2,
+}
+
+impl Tech {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Tech::Sip => "SIP",
+            Tech::Pjsip => "PJSIP",
+            Tech::Iax2 => "IAX2",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Peer {
     pub name: String,
     pub ip: String,
     /// Texto crudo del header `Status` de AMI (ej. "OK (5 ms)", "UNREACHABLE", "UNKNOWN").
+    ///
+    /// Para PJSIP no existe un header `Status` equivalente: se normaliza acá
+    /// mismo a partir del estado de sus contactos (ver `parse_pjsip_peers` en
+    /// `ami::client`), para que `is_registered` funcione igual para las tres tech.
     pub status: String,
+    pub tech: Tech,
 }
 
 impl Peer {

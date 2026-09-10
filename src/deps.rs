@@ -278,6 +278,9 @@ impl Interface {
     /// IPs para mostrar al lado del nombre: sin esto elegir entre `eth0`, `ens18`
     /// y `docker0` es adivinar.
     pub fn summary(&self) -> String {
+        if self.name == "any" {
+            return "todas las interfaces".to_string();
+        }
         if self.ips.is_empty() {
             return "sin dirección".to_string();
         }
@@ -295,7 +298,7 @@ impl Interface {
 /// interfaz sin dirección (o `any`, que en Linux entrega cooked capture) es peor
 /// default que la NIC por la que efectivamente pasa el SIP.
 pub fn interfaces() -> Vec<Interface> {
-    let mut interfaces: Vec<Interface> = pcap::Device::list()
+    let devices: Vec<Interface> = pcap::Device::list()
         .unwrap_or_default()
         .into_iter()
         .map(|device| Interface {
@@ -303,6 +306,15 @@ pub fn interfaces() -> Vec<Interface> {
             ips: device.addresses.into_iter().map(|a| a.addr).collect(),
         })
         .collect();
+
+    with_any(devices)
+}
+
+/// Ordena las interfaces detectadas y garantiza que `any` esté siempre al final
+/// de la lista, sin duplicarla si `libpcap` ya la reportó (Linux con permisos la
+/// incluye; macOS o una lista sin privilegios no).
+fn with_any(mut interfaces: Vec<Interface>) -> Vec<Interface> {
+    interfaces.retain(|i| i.name != "any");
 
     interfaces.sort_by(|a, b| {
         let rank = |i: &Interface| {
@@ -316,6 +328,10 @@ pub fn interfaces() -> Vec<Interface> {
         rank(a).cmp(&rank(b)).then_with(|| a.name.cmp(&b.name))
     });
 
+    interfaces.push(Interface {
+        name: "any".to_string(),
+        ips: Vec::new(),
+    });
     interfaces
 }
 
@@ -343,4 +359,64 @@ fn pkg_config_has_libpcap() -> bool {
 fn is_root() -> bool {
     // SAFETY: `geteuid` no toma punteros ni puede fallar.
     unsafe { libc::geteuid() == 0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    fn iface(name: &str, ip: Option<&str>) -> Interface {
+        Interface {
+            name: name.to_string(),
+            ips: ip
+                .map(|ip| vec![ip.parse::<IpAddr>().unwrap()])
+                .unwrap_or_default(),
+        }
+    }
+
+    #[test]
+    fn any_siempre_aparece_al_final_aunque_libpcap_no_la_liste() {
+        let result = with_any(vec![iface("eth0", Some("192.168.1.10"))]);
+        assert_eq!(result.last().unwrap().name, "any");
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn no_duplica_any_si_libpcap_ya_la_reporta() {
+        let result = with_any(vec![
+            iface("eth0", Some("192.168.1.10")),
+            iface("any", None),
+        ]);
+        let any_count = result.iter().filter(|i| i.name == "any").count();
+        assert_eq!(any_count, 1);
+        assert_eq!(result.last().unwrap().name, "any");
+    }
+
+    #[test]
+    fn interfaz_con_ip_routeable_va_antes_que_any() {
+        let result = with_any(vec![iface("lo", Some("127.0.0.1")), iface("eth0", Some("10.0.0.5"))]);
+        assert_eq!(result[0].name, "eth0");
+        assert_eq!(result[1].name, "lo");
+        assert_eq!(result[2].name, "any");
+    }
+
+    #[test]
+    fn any_se_resume_como_todas_las_interfaces() {
+        let any = iface("any", None);
+        assert_eq!(any.summary(), "todas las interfaces");
+    }
+
+    #[test]
+    fn interfaz_sin_ip_se_resume_como_sin_direccion() {
+        assert_eq!(iface("docker0", None).summary(), "sin dirección");
+    }
+
+    #[test]
+    fn interfaz_con_ip_resume_la_direccion() {
+        assert_eq!(
+            iface("eth0", Some("10.0.0.5")).summary(),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5)).to_string()
+        );
+    }
 }

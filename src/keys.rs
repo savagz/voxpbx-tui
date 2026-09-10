@@ -9,6 +9,12 @@ pub enum AppAction {
     Down,
     CycleSipFilter,
     ToggleSipTraceCapture,
+    /// Vacía el buffer de paquetes SIP capturados.
+    ClearSipTrace,
+    /// Abre la secuencia completa (ladder) de la llamada del paquete seleccionado.
+    OpenCallFlow,
+    /// Cierra la secuencia y vuelve a la lista plana de paquetes.
+    CloseCallFlow,
     /// Abre el panel de configuración de Asterisk sobre la TUI.
     OpenConfig,
     /// Ir al principio de la lista (deja de seguir el tráfico en vivo).
@@ -33,6 +39,9 @@ pub fn action_for(key: KeyEvent) -> Option<AppAction> {
         KeyCode::End | KeyCode::Char('G') => Some(AppAction::Follow),
         KeyCode::Char('f') => Some(AppAction::CycleSipFilter),
         KeyCode::Char('s') => Some(AppAction::ToggleSipTraceCapture),
+        KeyCode::Char('l') => Some(AppAction::ClearSipTrace),
+        KeyCode::Enter => Some(AppAction::OpenCallFlow),
+        KeyCode::Esc => Some(AppAction::CloseCallFlow),
         _ => None,
     }
 }

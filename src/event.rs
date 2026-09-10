@@ -13,6 +13,12 @@ pub enum AppEvent {
     CoreStatusUpdated(CoreStatus),
     ChannelsUpdated(Vec<Channel>),
     PeersUpdated(Vec<Peer>),
+    /// Endpoints PJSIP, refrescados aparte de `PeersUpdated` (chan_sip) para no
+    /// mezclar drivers en la tab de extensiones sin pedirlo explícitamente; el
+    /// selector de SIP Trace los combina con `App::sip_candidate_peers`.
+    PjsipPeersUpdated(Vec<Peer>),
+    /// Peers IAX2, mismo motivo que `PjsipPeersUpdated`.
+    IaxPeersUpdated(Vec<Peer>),
     QueuesUpdated(Vec<Queue>),
     SysSnapshot(HostSnapshot),
     /// Un mensaje SIP capturado. Va en `Box` porque es la variante más pesada del

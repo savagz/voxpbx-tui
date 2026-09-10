@@ -7,6 +7,7 @@ use ratatui::{
 
 use crate::app::App;
 use crate::theme::{Status, Theme};
+use crate::ui::tabs::Tab;
 
 /// Barra inferior: teclas grabadas como capuchones de tecla. Si hay un aviso
 /// reciente (config guardada, error), ocupa la barra hasta la próxima tecla.
@@ -38,6 +39,18 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         key(theme, "Q", theme.error),
         label(theme, "salir"),
     ];
+
+    if app.active_tab == Tab::SipTrace {
+        if app.sip_call_flow.is_some() {
+            spans.push(key(theme, "ESC", theme.accent_secondary));
+            spans.push(label(theme, "volver"));
+        } else {
+            spans.push(key(theme, "↵", theme.accent_secondary));
+            spans.push(label(theme, "secuencia"));
+        }
+        spans.push(key(theme, "L", theme.warning));
+        spans.push(label(theme, "limpiar"));
+    }
 
     if app.sip_trace_active {
         spans.push(Span::styled(
