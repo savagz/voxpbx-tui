@@ -1,6 +1,6 @@
 [package]
 name = "voxpbx-tui"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 description = "TUI para monitorear un servidor Asterisk"
 repository = "https://github.com/savagz/voxpbx-tui"
