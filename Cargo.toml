@@ -1,7 +1,9 @@
 [package]
 name = "voxpbx-tui"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
+description = "TUI para monitorear un servidor Asterisk"
+repository = "https://github.com/savagz/voxpbx-tui"
 
 [dependencies]
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal", "io-util"] }
@@ -26,3 +28,8 @@ libc = "0.2"
 
 [dev-dependencies]
 pretty_assertions = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
