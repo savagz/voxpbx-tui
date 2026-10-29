@@ -1,6 +1,8 @@
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+use crate::sip_capture::capture::promisc_for;
+
 /// Chequeo y remediación de las dependencias del análisis SIP.
 ///
 /// El análisis SIP se apoya en `libpcap`. Compilado en local el binario la enlaza
@@ -215,7 +217,9 @@ fn check_permission(interface: &str) -> CheckState {
         return CheckState::Unknown("todavía no elegiste interfaz".to_string());
     }
 
-    let opened = pcap::Capture::from_device(interface).and_then(|c| c.promisc(true).open());
+    // Mismas opciones que la captura real: si no, el chequeo da un falso rojo.
+    let opened = pcap::Capture::from_device(interface)
+        .and_then(|c| c.promisc(promisc_for(interface)).open());
 
     match opened {
         Ok(_) => CheckState::Ok(format!("se puede capturar en {interface}")),
@@ -405,6 +409,12 @@ mod tests {
         assert_eq!(result[0].name, "eth0");
         assert_eq!(result[1].name, "lo");
         assert_eq!(result[2].name, "any");
+    }
+
+    #[test]
+    fn any_se_abre_sin_modo_promiscuo() {
+        assert!(!promisc_for("any"));
+        assert!(promisc_for("eth0"));
     }
 
     #[test]

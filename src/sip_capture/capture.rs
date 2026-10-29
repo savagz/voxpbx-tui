@@ -52,13 +52,20 @@ pub fn spawn(mut config_rx: watch::Receiver<CaptureConfig>, app_tx: mpsc::Sender
     });
 }
 
+/// libpcap (1.10+) rechaza abrir `any` en modo promiscuo: es una pseudo-interfaz
+/// y la captura falla entera. En el resto de las interfaces lo pedimos para ver el
+/// SIP que no va dirigido a esta máquina.
+pub fn promisc_for(interface: &str) -> bool {
+    interface != "any"
+}
+
 fn run_capture(
     config: &CaptureConfig,
     app_tx: &mpsc::Sender<AppEvent>,
     config_rx: &watch::Receiver<CaptureConfig>,
 ) -> Result<()> {
     let mut cap = pcap::Capture::from_device(config.interface.as_str())?
-        .promisc(true)
+        .promisc(promisc_for(&config.interface))
         .snaplen(65535)
         .timeout(500)
         .open()?;
