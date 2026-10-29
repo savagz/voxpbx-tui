@@ -3,10 +3,11 @@ use std::process::{Command, Stdio};
 
 /// Chequeo y remediación de las dependencias del análisis SIP.
 ///
-/// El análisis SIP se apoya en `libpcap`. El binario la enlaza dinámicamente, así
-/// que el asistente verifica tres cosas distintas y cada una tiene su propio
-/// arreglo: la librería en runtime, los headers (necesarios para recompilar) y el
-/// permiso para abrir la interfaz en modo captura.
+/// El análisis SIP se apoya en `libpcap`. Compilado en local el binario la enlaza
+/// dinámicamente, así que el asistente verifica tres cosas distintas y cada una
+/// tiene su propio arreglo: la librería en runtime, los headers (necesarios para
+/// recompilar) y el permiso para abrir la interfaz en modo captura. El binario de
+/// las releases (musl estático) la lleva adentro.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackageManager {
     Apt,
@@ -172,6 +173,11 @@ fn check_library(pm: Option<PackageManager>) -> CheckState {
 }
 
 fn check_headers(pm: Option<PackageManager>) -> CheckState {
+    if cfg!(all(target_os = "linux", target_feature = "crt-static")) {
+        // Binario de release: libpcap va enlazada estáticamente y no hay nada que
+        // recompilar, así que pedir libpcap-dev sería ruido.
+        return CheckState::Ok("no hace falta: libpcap enlazada en el binario".to_string());
+    }
     if pkg_config_has_libpcap() {
         return CheckState::Ok("pkg-config encuentra libpcap".to_string());
     }

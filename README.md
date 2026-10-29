@@ -13,7 +13,67 @@ Pensada para correr **directamente en el servidor Asterisk** (así CPU/RAM/disco
 - **Captura consciente de la capa de enlace**: soporta Ethernet, cooked capture de Linux (`any`) y loopback. La v2 asumía Ethernet siempre, así que con `any` o loopback la pestaña SIP Trace quedaba vacía sin dar ningún error.
 - **Rediseño industrial**: paleta de chapa oscura con ámbar de señalización y cian de instrumento, botonera lateral con LEDs, placas de título grabadas, gauges segmentados y franjas de peligro.
 
-## Requisitos
+## Instalación
+
+Las releases publican un binario para Linux x86_64 estático (musl, con `libpcap` enlazada adentro) que corre en cualquier distribución sin instalar nada más.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/savagz/voxpbx-tui/main/install.sh | sh
+```
+
+Sin `curl`, con `wget`:
+
+```sh
+wget -qO- https://raw.githubusercontent.com/savagz/voxpbx-tui/main/install.sh | sh
+```
+
+El script baja la última release, verifica su checksum SHA-256, instala `voxpbx-tui` en `/usr/local/bin` (usando `sudo` sólo si hace falta) y le da al binario las capabilities `cap_net_raw,cap_net_admin` para que el SIP Trace pueda capturar sin correr como root. La última release se resuelve siguiendo la redirección de `github.com/savagz/voxpbx-tui/releases/latest`, no la API de GitHub, así que no sufre su rate limit. Las opciones se pasan después de `sh -s --`:
+
+```sh
+# Fijar una versión ("v0.1.0" y "0.1.0" valen igual)
+curl -fsSL https://raw.githubusercontent.com/savagz/voxpbx-tui/main/install.sh | sh -s -- --version v0.1.0
+
+# Instalar sin root (el directorio se crea si no existe)
+curl -fsSL https://raw.githubusercontent.com/savagz/voxpbx-tui/main/install.sh | sh -s -- --prefix ~/.local/bin
+
+# No tocar las capabilities
+curl -fsSL https://raw.githubusercontent.com/savagz/voxpbx-tui/main/install.sh | sh -s -- --no-setcap
+
+# Desinstalar (pasando el mismo --prefix que al instalar)
+curl -fsSL https://raw.githubusercontent.com/savagz/voxpbx-tui/main/install.sh | sh -s -- --uninstall
+```
+
+La versión también se puede fijar con la variable `VOXPBX_VERSION`. `--help` lista las opciones.
+
+Si el repositorio es privado, el one-liner no funciona sin autenticación: bajá los assets de la release a mano.
+
+### Instalación manual
+
+Bajá `voxpbx-tui-<tag>-x86_64-linux.tar.gz` y su `.sha256` desde la [página de releases](https://github.com/savagz/voxpbx-tui/releases) y:
+
+```sh
+sha256sum -c voxpbx-tui-<tag>-x86_64-linux.tar.gz.sha256
+tar -xzf voxpbx-tui-<tag>-x86_64-linux.tar.gz
+sudo install -m 0755 voxpbx-tui-<tag>-x86_64-linux/voxpbx-tui /usr/local/bin/
+sudo setcap cap_net_raw,cap_net_admin+eip /usr/local/bin/voxpbx-tui
+```
+
+### Publicar una release
+
+1. Subí `version` en `Cargo.toml` y commiteá.
+2. `git tag vX.Y.Z && git push origin vX.Y.Z`.
+3. El workflow `release` de GitHub Actions compila `libpcap` estática contra musl, corre los tests, compila y publica los assets. También se puede lanzar a mano (`workflow_dispatch`) para compilar sin publicar.
+
+### Línea de comandos
+
+```
+voxpbx-tui [OPCIONES]
+
+    -V, --version    Muestra la versión y sale
+    -h, --help       Muestra esta ayuda y sale
+```
+
+## Requisitos para compilar desde el código
 
 - Rust (instalado vía [rustup](https://rustup.rs)).
 - `libpcap` en el sistema (dependencia de enlace del crate `pcap`). Si falta, el asistente lo detecta y ofrece instalarlo:

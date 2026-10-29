@@ -24,8 +24,41 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tracing::warn;
 
+const USAGE: &str = "voxpbx-tui: TUI para monitorear un servidor Asterisk
+
+USO:
+    voxpbx-tui [OPCIONES]
+
+OPCIONES:
+    -V, --version    Muestra la versión y sale
+    -h, --help       Muestra esta ayuda y sale
+
+ENTORNO:
+    VOXPBX_AMI_SECRET    Secret de AMI (gana sobre el guardado en la config)
+    RUST_LOG             Nivel de log (por defecto info)";
+
+/// Atiende `--version`/`--help` antes de tocar la terminal: así `install.sh`
+/// puede comprobar la instalación sin abrir la TUI. Devuelve `true` si ya
+/// respondió y hay que salir.
+fn handle_cli_args() -> bool {
+    match std::env::args().nth(1).as_deref() {
+        Some("-V" | "--version") => {
+            println!("voxpbx-tui {}", env!("CARGO_PKG_VERSION"));
+            true
+        }
+        Some("-h" | "--help") => {
+            println!("{USAGE}");
+            true
+        }
+        _ => false,
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    if handle_cli_args() {
+        return Ok(());
+    }
     color_eyre::install()?;
     let _log_guard = logging::init()?;
 
